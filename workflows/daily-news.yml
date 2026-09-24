@@ -2,8 +2,8 @@ name: Daily News Briefing
 
 on:
   schedule:
-    # UTC 23:00 = 한국시간(KST) 오전 08:00
-    - cron: "0 23 * * *"
+    # UTC 21:00 = 한국시간(KST) 오전 06:00
+    - cron: "0 21 * * *"
   workflow_dispatch: {}  # 수동으로도 실행 가능 (Actions 탭에서 Run workflow)
 
 jobs:
