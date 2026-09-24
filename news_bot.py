@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import html
 import feedparser
 import requests
@@ -23,8 +24,11 @@ RSS_FEEDS = {
 # 3. 필터링할 핵심 키워드 목록
 # ==========================================
 TARGET_KEYWORDS = [
-    # 반도체 및 테크
-    "반도체", "HBM", "DRAM", "NAND", "파운드리", "TSMC", "엔비디아", "인텔", "EUV",
+    # 반도체 기업
+    "삼성전자", "SK하이닉스", "하이닉스", "마이크론", "TSMC", "엔비디아", "인텔",
+    "AMD", "퀄컴", "브로드컴", "ASML", "AI칩",
+    # 반도체 기술/산업
+    "반도체", "HBM", "DRAM", "NAND", "파운드리", "EUV",
     # 매크로 & 국제정세
     "환율", "금리", "연준", "FOMC", "인플레이션", "유가", "전쟁", "대만", "중동", "지정학"
 ]
@@ -53,6 +57,7 @@ def send_telegram(text):
         res = requests.post(url, json=payload, timeout=10)
         if res.status_code != 200:
             print(f"❌ 텔레그램 응답 오류: {res.status_code} {res.text}")
+            print("힌트: chat_id가 올바른지, 봇과 대화를 시작(/start)했는지 확인하세요.")
         return res.status_code == 200
     except requests.RequestException as e:
         print(f"❌ 전송 중 네트워크 오류: {e}")
@@ -123,8 +128,12 @@ def main():
     matching_articles = fetch_articles()
 
     if not matching_articles:
-        send_telegram("📢 현재 조건에 맞는 최신 반도체/국제정세 기사가 없습니다.")
-        print("ℹ️ 조건에 맞는 기사가 없어 알림만 발송했습니다.")
+        success = send_telegram("📢 현재 조건에 맞는 최신 반도체/국제정세 기사가 없습니다.")
+        if success:
+            print("ℹ️ 조건에 맞는 기사가 없어 알림만 발송했습니다.")
+        else:
+            print("❌ 발송 실패. 토큰 또는 Chat ID를 다시 확인하세요.")
+            sys.exit(1)
         return
 
     final_message = build_message(matching_articles)
@@ -134,6 +143,7 @@ def main():
         print("✅ 텔레그램 발송 완료!")
     else:
         print("❌ 발송 실패. 토큰 또는 Chat ID를 다시 확인하세요.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
