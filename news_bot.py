@@ -2,6 +2,8 @@ import os
 import re
 import sys
 import html
+import calendar
+from datetime import datetime, timezone, timedelta
 import feedparser
 import requests
 
@@ -35,6 +37,8 @@ TARGET_KEYWORDS = [
 
 MAX_ARTICLES = 6
 MAX_MESSAGE_LEN = 4000  # 텔레그램 한도(4096)보다 여유있게 설정
+MAX_ENTRIES_PER_FEED = 50  # 피드별 탐색할 최신 기사 개수
+ARTICLE_MAX_AGE_HOURS = 24  # 이 시간 이내에 발행된 기사만 포함
 
 
 def clean_text(raw_html):
@@ -42,6 +46,17 @@ def clean_text(raw_html):
     cleanr = re.compile('<.*?>')
     cleantext = re.sub(cleanr, '', raw_html)
     return html.unescape(cleantext).strip()
+
+
+def is_recent(entry, max_age_hours):
+    """기사 발행 시각이 max_age_hours 이내인지 확인. 발행 시각을 알 수 없으면 통과시킴."""
+    time_struct = getattr(entry, 'published_parsed', None) or getattr(entry, 'updated_parsed', None)
+    if not time_struct:
+        return True  # 발행 시각 정보가 없으면 걸러내지 않음
+
+    published_dt = datetime.fromtimestamp(calendar.timegm(time_struct), tz=timezone.utc)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+    return published_dt >= cutoff
 
 
 def send_telegram(text):
@@ -72,12 +87,15 @@ def fetch_articles():
         if feed.bozo:
             print(f"⚠️ {category} 피드 파싱 경고: {feed.bozo_exception}")
 
-        for entry in feed.entries[:15]:  # 최신 기사 15개 탐색
+        for entry in feed.entries[:MAX_ENTRIES_PER_FEED]:
             title = getattr(entry, 'title', '')
             summary = clean_text(getattr(entry, 'summary', ''))
             link = getattr(entry, 'link', '')
 
             if not title or not link:
+                continue
+
+            if not is_recent(entry, ARTICLE_MAX_AGE_HOURS):
                 continue
 
             found_keywords = [kw for kw in TARGET_KEYWORDS if kw in title or kw in summary]
