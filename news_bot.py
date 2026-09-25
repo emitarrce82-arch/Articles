@@ -12,7 +12,8 @@ from deep_translator import GoogleTranslator
 # 1. 텔레그램 설정 (GitHub Secrets에서 불러옴)
 # ==========================================
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+# 여러 명에게 보내려면 GitHub Secret에 쉼표로 구분해서 입력: "8599103152,987654321"
+TELEGRAM_CHAT_IDS = [cid.strip() for cid in os.environ["TELEGRAM_CHAT_ID"].split(",") if cid.strip()]
 
 # ==========================================
 # 2. RSS 뉴스 소스 목록 (경제, 국제정세, 테크)
@@ -84,23 +85,26 @@ def translate_to_korean(text):
 
 
 def send_telegram(text):
-    """텔레그램 메시지 발송"""
+    """텔레그램 메시지 발송 (등록된 모든 Chat ID에게 전송). 하나라도 성공하면 True 반환."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True
-    }
-    try:
-        res = requests.post(url, json=payload, timeout=10)
-        if res.status_code != 200:
-            print(f"❌ 텔레그램 응답 오류: {res.status_code} {res.text}")
-            print("힌트: chat_id가 올바른지, 봇과 대화를 시작(/start)했는지 확인하세요.")
-        return res.status_code == 200
-    except requests.RequestException as e:
-        print(f"❌ 전송 중 네트워크 오류: {e}")
-        return False
+    any_success = False
+    for chat_id in TELEGRAM_CHAT_IDS:
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True
+        }
+        try:
+            res = requests.post(url, json=payload, timeout=10)
+            if res.status_code != 200:
+                print(f"❌ [{chat_id}] 텔레그램 응답 오류: {res.status_code} {res.text}")
+                print("힌트: chat_id가 올바른지, 봇과 대화를 시작(/start)했는지 확인하세요.")
+            else:
+                any_success = True
+        except requests.RequestException as e:
+            print(f"❌ [{chat_id}] 전송 중 네트워크 오류: {e}")
+    return any_success
 
 
 def fetch_articles():
