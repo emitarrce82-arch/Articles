@@ -6,6 +6,7 @@ import calendar
 from datetime import datetime, timezone, timedelta
 import feedparser
 import requests
+from deep_translator import GoogleTranslator
 
 # ==========================================
 # 1. 텔레그램 설정 (GitHub Secrets에서 불러옴)
@@ -19,20 +20,32 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 RSS_FEEDS = {
     "경제/환율/금리": "https://rss.donga.com/economy.xml",
     "국제/전쟁/정세": "https://rss.donga.com/international.xml",
-    "IT/테크": "https://rss.donga.com/it.xml"
+    "IT/테크": "https://rss.donga.com/it.xml",
+    # 영어권 소스
+    "[EN] BBC Business": "http://feeds.bbci.co.uk/news/business/rss.xml",
+    "[EN] BBC Technology": "http://feeds.bbci.co.uk/news/technology/rss.xml",
+    "[EN] Tom's Hardware Semiconductors": "https://www.tomshardware.com/feeds/tag/semiconductors",
 }
 
 # ==========================================
-# 3. 필터링할 핵심 키워드 목록
+# 3. 필터링할 핵심 키워드 목록 (한글 + 영어, 대소문자 구분 없이 매칭)
 # ==========================================
 TARGET_KEYWORDS = [
-    # 반도체 기업
+    # 반도체 기업 (한글)
     "삼성전자", "SK하이닉스", "하이닉스", "마이크론", "TSMC", "엔비디아", "인텔",
     "AMD", "퀄컴", "브로드컴", "ASML", "AI칩",
-    # 반도체 기술/산업
+    # 반도체 기술/산업 (한글)
     "반도체", "HBM", "DRAM", "NAND", "파운드리", "EUV",
-    # 매크로 & 국제정세
-    "환율", "금리", "연준", "FOMC", "인플레이션", "유가", "전쟁", "대만", "중동", "지정학"
+    # 매크로 & 국제정세 (한글)
+    "환율", "금리", "연준", "FOMC", "인플레이션", "유가", "전쟁", "대만", "중동", "지정학",
+    # 반도체 기업 (영어)
+    "Samsung", "SK Hynix", "Hynix", "Micron", "Nvidia", "Intel", "Qualcomm",
+    "Broadcom", "ASML",
+    # 반도체 기술/산업 (영어)
+    "semiconductor", "chip", "foundry",
+    # 매크로 & 국제정세 (영어)
+    "Federal Reserve", "interest rate", "inflation", "oil price", "Taiwan",
+    "Middle East", "geopolitics", "tariff",
 ]
 
 MAX_ARTICLES = 6
@@ -57,6 +70,17 @@ def is_recent(entry, max_age_hours):
     published_dt = datetime.fromtimestamp(calendar.timegm(time_struct), tz=timezone.utc)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
     return published_dt >= cutoff
+
+
+def translate_to_korean(text):
+    """영어 텍스트를 한국어로 번역. 실패하면 None을 반환(번역 없이 진행)."""
+    if not text:
+        return None
+    try:
+        return GoogleTranslator(source='en', target='ko').translate(text)
+    except Exception as e:
+        print(f"⚠️ 번역 실패: {e}")
+        return None
 
 
 def send_telegram(text):
@@ -98,15 +122,22 @@ def fetch_articles():
             if not is_recent(entry, ARTICLE_MAX_AGE_HOURS):
                 continue
 
-            found_keywords = [kw for kw in TARGET_KEYWORDS if kw in title or kw in summary]
+            found_keywords = [kw for kw in TARGET_KEYWORDS if kw.lower() in title.lower() or kw.lower() in summary.lower()]
             if found_keywords:
-                matching_articles.append({
+                is_english = category.startswith("[EN]")
+                article = {
                     "category": category,
                     "title": title,
                     "summary": summary[:120] + "..." if len(summary) > 120 else summary,
                     "link": link,
-                    "keywords": list(set(found_keywords))
-                })
+                    "keywords": list(set(found_keywords)),
+                    "translated_title": None,
+                    "translated_summary": None,
+                }
+                if is_english:
+                    article["translated_title"] = translate_to_korean(title)
+                    article["translated_summary"] = translate_to_korean(article["summary"])
+                matching_articles.append(article)
 
     return matching_articles
 
@@ -128,6 +159,12 @@ def build_message(matching_articles):
         block = [f"🔹 <b>{safe_title}</b>", f"태그: <i>{kw_str}</i>"]
         if safe_summary:
             block.append(safe_summary)
+
+        if art.get('translated_title'):
+            block.append(f"🇰🇷 <i>{html.escape(art['translated_title'])}</i>")
+        if art.get('translated_summary'):
+            block.append(html.escape(art['translated_summary']))
+
         block.append(f"<a href='{art['link']}'>👉 기사 원문 보기</a>\n")
 
         candidate = "\n".join(msg_lines + block)
