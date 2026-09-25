@@ -48,7 +48,7 @@ TARGET_KEYWORDS = [
     "Middle East", "geopolitics", "tariff",
 ]
 
-MAX_ARTICLES = 6
+MAX_ARTICLES = 10
 MAX_MESSAGE_LEN = 4000  # 텔레그램 한도(4096)보다 여유있게 설정
 MAX_ENTRIES_PER_FEED = 50  # 피드별 탐색할 최신 기사 개수
 ARTICLE_MAX_AGE_HOURS = 24  # 이 시간 이내에 발행된 기사만 포함
@@ -142,12 +142,30 @@ def fetch_articles():
     return matching_articles
 
 
+def diversify_order(matching_articles):
+    """한글/영어 기사를 번갈아 배치하되, 한쪽이 부족하면 다른 쪽으로 최대 MAX_ARTICLES개까지 채운다."""
+    korean_articles = [a for a in matching_articles if not a['category'].startswith("[EN]")]
+    english_articles = [a for a in matching_articles if a['category'].startswith("[EN]")]
+
+    ordered = []
+    i = 0
+    while len(ordered) < MAX_ARTICLES and (i < len(korean_articles) or i < len(english_articles)):
+        if i < len(korean_articles):
+            ordered.append(korean_articles[i])
+            if len(ordered) >= MAX_ARTICLES:
+                break
+        if i < len(english_articles):
+            ordered.append(english_articles[i])
+        i += 1
+    return ordered[:MAX_ARTICLES]
+
+
 def build_message(matching_articles):
     msg_lines = ["<b>📊 [반도체 & 글로벌 정세 핵심 브리핑]</b>\n"]
 
     seen_titles = set()
     count = 0
-    for art in matching_articles:
+    for art in diversify_order(matching_articles):
         if art['title'] in seen_titles:
             continue
         seen_titles.add(art['title'])
