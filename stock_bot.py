@@ -56,19 +56,21 @@ def pad(s, width):
 
 
 def fetch_price_change(symbol):
-    """전일 종가 기준 등락률(%)을 계산. 실패하면 None."""
+    """전일 종가 기준 등락률(%)과 그 기준이 된 거래일(현지 거래소 기준 날짜)을 계산. 실패하면 (None, None)."""
     try:
         hist = yf.Ticker(symbol).history(period="5d")
         if len(hist) < 2:
-            return None
+            return None, None
         last_close = hist['Close'].iloc[-1]
         prev_close = hist['Close'].iloc[-2]
+        last_date = hist.index[-1]
         if prev_close == 0:
-            return None
-        return round((last_close - prev_close) / prev_close * 100, 2)
+            return None, None
+        change = round((last_close - prev_close) / prev_close * 100, 2)
+        return change, last_date.strftime("%Y-%m-%d")
     except Exception as e:
         print(f"⚠️ [{symbol}] 주가 조회 실패: {e}")
-        return None
+        return None, None
 
 
 def fetch_next_earnings_date(symbol):
@@ -190,11 +192,64 @@ def fetch_rows(ticker_list):
     rows = []
     for name, symbol in ticker_list:
         print(f"조회 중: {name} ({symbol})")
-        change = fetch_price_change(symbol)
+        change, as_of = fetch_price_change(symbol)
         earnings = fetch_next_earnings_date(symbol)
         news = fetch_latest_news_headline(symbol)
-        rows.append({"name": name, "symbol": symbol, "change": change, "earnings": earnings, "news": news})
+        rows.append({"name": name, "symbol": symbol, "change": change, "as_of": as_of,
+                     "earnings": earnings, "news": news})
     return rows
+
+
+def most_common_as_of(rows):
+    """종목들 중 가장 흔한 거래 기준일을 대표값으로 사용 (개별 종목마다 휴장/지연 차이가 있을 수 있어서)."""
+    dates = [r['as_of'] for r in rows if r.get('as_of')]
+    if not dates:
+        return None
+    counts = {}
+    for d in dates:
+        counts[d] = counts.get(d, 0) + 1
+    return max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
+
+
+MARKET_STATE_LABELS = {
+    "REGULAR": "장중(진행중)",
+    "PRE": "프리마켓",
+    "POST": "애프터마켓",
+    "CLOSED": "장마감",
+}
+
+
+def get_market_state_label(symbol):
+    """대표 종목 하나로 해당 시장이 지금 열려있는지/닫혀있는지 확인. 실패하면 (None, None)."""
+    try:
+        state = yf.Ticker(symbol).info.get('marketState')
+        return state, MARKET_STATE_LABELS.get(state)
+    except Exception as e:
+        print(f"⚠️ [{symbol}] 시장 상태 조회 실패: {e}")
+        return None, None
+
+
+def build_timing_label(as_of_date_str, state, exchange_tz_name, close_hour, close_minute):
+    """표 제목에 들어갈 '기준일 + 시각 + 마감/진행중' 라벨을 만든다. 시각은 항상 한국시간(KST)으로 환산."""
+    if not as_of_date_str:
+        return None
+
+    state_label = MARKET_STATE_LABELS.get(state, "정보없음")
+
+    if state == "CLOSED" or state is None:
+        # 마감 시각(해당 거래소 현지 마감 시각)을 KST로 환산해서 표시
+        try:
+            local_close = datetime.strptime(as_of_date_str, "%Y-%m-%d").replace(
+                hour=close_hour, minute=close_minute, tzinfo=ZoneInfo(exchange_tz_name)
+            )
+            kst_close = local_close.astimezone(ZoneInfo("Asia/Seoul"))
+            return f"{kst_close.strftime('%m/%d %H:%M')} KST 마감"
+        except Exception:
+            return f"{as_of_date_str} {state_label}"
+    else:
+        # 장이 열려있는 중이면 '지금 이 시각 기준'으로 표시
+        now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
+        return f"{now_kst.strftime('%m/%d %H:%M')} KST 기준 ({state_label})"
 
 
 def send_telegram(text):
@@ -219,16 +274,25 @@ def send_telegram(text):
 
 
 def main():
-    now_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST")
-
     us_rows = fetch_rows(TICKERS)
     kr_rows = fetch_rows(KR_TICKERS)
 
+    us_as_of = most_common_as_of(us_rows)
+    kr_as_of = most_common_as_of(kr_rows)
+
+    us_state, _ = get_market_state_label(TICKERS[0][1])
+    kr_state, _ = get_market_state_label(KR_TICKERS[0][1])
+
+    us_timing = build_timing_label(us_as_of, us_state, "America/New_York", 16, 0)
+    kr_timing = build_timing_label(kr_as_of, kr_state, "Asia/Seoul", 15, 30)
+
+    us_title = f"🇺🇸 미국 시장 ({us_timing})" if us_timing else "🇺🇸 미국 시장"
+    kr_title = f"🇰🇷 국내 비교 ({kr_timing})" if kr_timing else "🇰🇷 국내 비교 (코스피 원주)"
+
     message_parts = [
-        "<b>📈 [반도체 관련 종목 전일 시황]</b>",
-        f"🕒 조사 시각: {now_kst}\n",
-        build_table_section(us_rows, "🇺🇸 미국 시장"),
-        build_table_section(kr_rows, "🇰🇷 국내 비교 (코스피 원주)"),
+        "<b>📈 [반도체 관련 종목 시황]</b>\n",
+        build_table_section(us_rows, us_title),
+        build_table_section(kr_rows, kr_title),
     ]
 
     us_news = build_news_section(us_rows, "🇺🇸 미국 관련 이슈")
