@@ -2,6 +2,7 @@ import os
 import sys
 import unicodedata
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import requests
 import yfinance as yf
@@ -89,26 +90,47 @@ def fetch_next_earnings_date(symbol):
         return None
 
 
+def contains_korean(text):
+    return any('\uac00' <= ch <= '\ud7a3' for ch in text)
+
+
+def looks_like_translation_error(text):
+    """번역 API가 실패 메시지를 결과처럼 반환하는 경우를 걸러내기 위한 방어 로직."""
+    error_markers = [
+        "INVALID SOURCE LANGUAGE",
+        "MYMEMORY WARNING",
+        "QUERY LENGTH LIMIT",
+        "IS AN INVALID",
+        "AMOUNT OF LETTERS",
+    ]
+    upper = text.upper()
+    return any(marker in upper for marker in error_markers)
+
+
 def translate_to_korean(text):
-    """텍스트를 한국어로 번역(원문 언어 자동 감지). 구글 번역이 막히면 MyMemory로 재시도. 둘 다 실패하거나 이미 한국어면 원문 반환."""
+    """영어 텍스트를 한국어로 번역. 이미 한국어면 그대로 반환. 구글이 막히면 MyMemory로 재시도.
+    두 서비스 모두 실패하거나 오류 메시지를 반환하면 원문을 그대로 반환한다."""
     if not text:
         return text
 
+    if contains_korean(text):
+        return text  # 이미 한국어면 번역 불필요
+
     try:
-        result = GoogleTranslator(source='auto', target='ko').translate(text)
-        if result and result.strip().lower() != text.strip().lower():
+        result = GoogleTranslator(source='en', target='ko').translate(text)
+        if result and not looks_like_translation_error(result) and result.strip().lower() != text.strip().lower():
             return result
     except Exception as e:
         print(f"⚠️ 구글 번역 실패, MyMemory로 재시도: {e}")
 
     try:
-        result = MyMemoryTranslator(source='auto', target='ko-KR').translate(text)
-        if result:
+        result = MyMemoryTranslator(source='en-GB', target='ko-KR').translate(text)
+        if result and not looks_like_translation_error(result):
             return result
     except Exception as e:
         print(f"⚠️ MyMemory 번역도 실패: {e}")
 
-    return text  # 둘 다 실패하거나 번역할 필요가 없으면(이미 한국어 등) 원문 반환
+    return text  # 둘 다 실패하면 원문이라도 반환
 
 
 def fetch_latest_news_headline(symbol):
@@ -156,8 +178,8 @@ def build_table_section(rows, title):
     return f"<b>{title}</b>\n<pre>" + "\n".join(lines) + "</pre>"
 
 
-def build_news_section(rows):
-    lines = ["<b>📰 최근 이슈 한 줄</b>"]
+def build_news_section(rows, title="📰 최근 이슈 한 줄"):
+    lines = [f"<b>{title}</b>"]
     for r in rows:
         if r['news']:
             lines.append(f"🔹 <b>{r['name']}</b>: {r['news']}")
@@ -197,22 +219,23 @@ def send_telegram(text):
 
 
 def main():
+    now_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST")
+
     us_rows = fetch_rows(TICKERS)
     kr_rows = fetch_rows(KR_TICKERS)
 
     message_parts = [
-        "<b>📈 [반도체 관련 종목 전일 시황]</b>\n",
+        "<b>📈 [반도체 관련 종목 전일 시황]</b>",
+        f"🕒 조사 시각: {now_kst}\n",
         build_table_section(us_rows, "🇺🇸 미국 시장"),
+        build_table_section(kr_rows, "🇰🇷 국내 비교 (코스피 원주)"),
     ]
 
-    us_news = build_news_section(us_rows)
+    us_news = build_news_section(us_rows, "🇺🇸 미국 관련 이슈")
     if us_news:
         message_parts.append("\n" + us_news)
 
-    message_parts.append("\n━━━━━━━━━━━━━━")
-    message_parts.append(build_table_section(kr_rows, "🇰🇷 국내 비교 (코스피 원주)"))
-
-    kr_news = build_news_section(kr_rows)
+    kr_news = build_news_section(kr_rows, "🇰🇷 국내 관련 이슈")
     if kr_news:
         message_parts.append("\n" + kr_news)
 
