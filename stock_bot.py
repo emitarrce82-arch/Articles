@@ -17,7 +17,7 @@ TELEGRAM_CHAT_IDS = [cid.strip() for cid in os.environ["TELEGRAM_CHAT_ID"].split
 # 2. 추적할 종목 (한국 반도체 시장에 영향을 주는 미국 종목)
 # ==========================================
 TICKERS = [
-    ("SK하이닉스", "SKHY"),
+    ("SK하이닉스(ADR)", "SKHY"),
     ("마이크론", "MU"),
     ("엔비디아", "NVDA"),
     ("TSMC", "TSM"),
@@ -26,6 +26,14 @@ TICKERS = [
     ("퀄컴", "QCOM"),
     ("브로드컴", "AVGO"),
     ("ASML", "ASML"),
+]
+
+# ==========================================
+# 2-1. 비교 참고용 국내 반도체 종목 (코스피 원주)
+# ==========================================
+KR_TICKERS = [
+    ("삼성전자", "005930.KS"),
+    ("SK하이닉스(국내)", "000660.KS"),
 ]
 
 MAX_MESSAGE_LEN = 4000
@@ -82,25 +90,25 @@ def fetch_next_earnings_date(symbol):
 
 
 def translate_to_korean(text):
-    """영어 텍스트를 한국어로 번역. 구글 번역이 막히면 MyMemory로 재시도. 둘 다 실패하면 원문 반환."""
+    """텍스트를 한국어로 번역(원문 언어 자동 감지). 구글 번역이 막히면 MyMemory로 재시도. 둘 다 실패하거나 이미 한국어면 원문 반환."""
     if not text:
         return text
 
     try:
-        result = GoogleTranslator(source='en', target='ko').translate(text)
+        result = GoogleTranslator(source='auto', target='ko').translate(text)
         if result and result.strip().lower() != text.strip().lower():
             return result
     except Exception as e:
         print(f"⚠️ 구글 번역 실패, MyMemory로 재시도: {e}")
 
     try:
-        result = MyMemoryTranslator(source='en-GB', target='ko-KR').translate(text)
+        result = MyMemoryTranslator(source='auto', target='ko-KR').translate(text)
         if result:
             return result
     except Exception as e:
         print(f"⚠️ MyMemory 번역도 실패: {e}")
 
-    return text  # 둘 다 실패하면 원문이라도 반환
+    return text  # 둘 다 실패하거나 번역할 필요가 없으면(이미 한국어 등) 원문 반환
 
 
 def fetch_latest_news_headline(symbol):
@@ -126,7 +134,7 @@ def fetch_latest_news_headline(symbol):
         return None
 
 
-def build_table_section(rows):
+def build_table_section(rows, title):
     """등락률/실적일 표 (모노스페이스 정렬)"""
     name_width = max(display_width(r['name']) for r in rows) + 1
     change_width = 9
@@ -145,7 +153,7 @@ def build_table_section(rows):
 
         lines.append(pad(r['name'], name_width) + pad(change_str, change_width) + earnings_str)
 
-    return "<pre>" + "\n".join(lines) + "</pre>"
+    return f"<b>{title}</b>\n<pre>" + "\n".join(lines) + "</pre>"
 
 
 def build_news_section(rows):
@@ -154,6 +162,17 @@ def build_news_section(rows):
         if r['news']:
             lines.append(f"🔹 <b>{r['name']}</b>: {r['news']}")
     return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def fetch_rows(ticker_list):
+    rows = []
+    for name, symbol in ticker_list:
+        print(f"조회 중: {name} ({symbol})")
+        change = fetch_price_change(symbol)
+        earnings = fetch_next_earnings_date(symbol)
+        news = fetch_latest_news_headline(symbol)
+        rows.append({"name": name, "symbol": symbol, "change": change, "earnings": earnings, "news": news})
+    return rows
 
 
 def send_telegram(text):
@@ -178,23 +197,24 @@ def send_telegram(text):
 
 
 def main():
-    rows = []
-    for name, symbol in TICKERS:
-        print(f"조회 중: {name} ({symbol})")
-        change = fetch_price_change(symbol)
-        earnings = fetch_next_earnings_date(symbol)
-        news = fetch_latest_news_headline(symbol)
-        rows.append({"name": name, "symbol": symbol, "change": change, "earnings": earnings, "news": news})
-
-    table_section = build_table_section(rows)
-    news_section = build_news_section(rows)
+    us_rows = fetch_rows(TICKERS)
+    kr_rows = fetch_rows(KR_TICKERS)
 
     message_parts = [
-        "<b>📈 [미국 반도체 관련 종목 전일 시황]</b>\n",
-        table_section,
+        "<b>📈 [반도체 관련 종목 전일 시황]</b>\n",
+        build_table_section(us_rows, "🇺🇸 미국 시장"),
     ]
-    if news_section:
-        message_parts.append("\n" + news_section)
+
+    us_news = build_news_section(us_rows)
+    if us_news:
+        message_parts.append("\n" + us_news)
+
+    message_parts.append("\n━━━━━━━━━━━━━━")
+    message_parts.append(build_table_section(kr_rows, "🇰🇷 국내 비교 (코스피 원주)"))
+
+    kr_news = build_news_section(kr_rows)
+    if kr_news:
+        message_parts.append("\n" + kr_news)
 
     final_message = "\n".join(message_parts)
     if len(final_message) > MAX_MESSAGE_LEN:
