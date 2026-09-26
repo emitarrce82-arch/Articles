@@ -17,6 +17,7 @@ TELEGRAM_CHAT_IDS = [cid.strip() for cid in os.environ["TELEGRAM_CHAT_ID"].split
 # 2. 추적할 종목 (한국 반도체 시장에 영향을 주는 미국 종목)
 # ==========================================
 TICKERS = [
+    ("SK하이닉스", "SKHY"),
     ("마이크론", "MU"),
     ("엔비디아", "NVDA"),
     ("TSMC", "TSM"),
