@@ -1,0 +1,30 @@
+name: Daily Stock Briefing
+
+on:
+  schedule:
+    # UTC 18:00 = 한국시간(KST) 오전 03:00
+    - cron: "0 18 * * *"
+    # UTC 05:00 = 한국시간(KST) 오후 02:00
+    - cron: "0 5 * * *"
+  workflow_dispatch: {}  # 수동으로도 실행 가능 (Actions 탭에서 Run workflow)
+
+jobs:
+  send-stock-briefing:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 파이썬 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 패키지 설치
+        run: pip install -r requirements.txt
+
+      - name: 주식 브리핑 실행
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python stock_bot.py
