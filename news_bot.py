@@ -6,12 +6,14 @@ import calendar
 from datetime import datetime, timezone, timedelta
 import feedparser
 import requests
+from deep_translator import GoogleTranslator
 
 # ==========================================
 # 1. 텔레그램 설정 (GitHub Secrets에서 불러옴)
 # ==========================================
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+# 여러 명에게 보내려면 GitHub Secret에 쉼표로 구분해서 입력: "8599103152,987654321"
+TELEGRAM_CHAT_IDS = [cid.strip() for cid in os.environ["TELEGRAM_CHAT_ID"].split(",") if cid.strip()]
 
 # ==========================================
 # 2. RSS 뉴스 소스 목록 (경제, 국제정세, 테크)
@@ -19,23 +21,35 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 RSS_FEEDS = {
     "경제/환율/금리": "https://rss.donga.com/economy.xml",
     "국제/전쟁/정세": "https://rss.donga.com/international.xml",
-    "IT/테크": "https://rss.donga.com/it.xml"
+    "IT/테크": "https://rss.donga.com/it.xml",
+    # 영어권 소스
+    "[EN] BBC Business": "http://feeds.bbci.co.uk/news/business/rss.xml",
+    "[EN] BBC Technology": "http://feeds.bbci.co.uk/news/technology/rss.xml",
+    "[EN] Tom's Hardware Semiconductors": "https://www.tomshardware.com/feeds/tag/semiconductors",
 }
 
 # ==========================================
-# 3. 필터링할 핵심 키워드 목록
+# 3. 필터링할 핵심 키워드 목록 (한글 + 영어, 대소문자 구분 없이 매칭)
 # ==========================================
 TARGET_KEYWORDS = [
-    # 반도체 기업
+    # 반도체 기업 (한글)
     "삼성전자", "SK하이닉스", "하이닉스", "마이크론", "TSMC", "엔비디아", "인텔",
     "AMD", "퀄컴", "브로드컴", "ASML", "AI칩",
-    # 반도체 기술/산업
+    # 반도체 기술/산업 (한글)
     "반도체", "HBM", "DRAM", "NAND", "파운드리", "EUV",
-    # 매크로 & 국제정세
-    "환율", "금리", "연준", "FOMC", "인플레이션", "유가", "전쟁", "대만", "중동", "지정학"
+    # 매크로 & 국제정세 (한글)
+    "환율", "금리", "연준", "FOMC", "인플레이션", "유가", "전쟁", "대만", "중동", "지정학",
+    # 반도체 기업 (영어)
+    "Samsung", "SK Hynix", "Hynix", "Micron", "Nvidia", "Intel", "Qualcomm",
+    "Broadcom", "ASML",
+    # 반도체 기술/산업 (영어)
+    "semiconductor", "chip", "foundry",
+    # 매크로 & 국제정세 (영어)
+    "Federal Reserve", "interest rate", "inflation", "oil price", "Taiwan",
+    "Middle East", "geopolitics", "tariff",
 ]
 
-MAX_ARTICLES = 6
+MAX_ARTICLES = 10
 MAX_MESSAGE_LEN = 4000  # 텔레그램 한도(4096)보다 여유있게 설정
 MAX_ENTRIES_PER_FEED = 50  # 피드별 탐색할 최신 기사 개수
 ARTICLE_MAX_AGE_HOURS = 24  # 이 시간 이내에 발행된 기사만 포함
@@ -59,24 +73,38 @@ def is_recent(entry, max_age_hours):
     return published_dt >= cutoff
 
 
-def send_telegram(text):
-    """텔레그램 메시지 발송"""
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True
-    }
+def translate_to_korean(text):
+    """영어 텍스트를 한국어로 번역. 실패하면 None을 반환(번역 없이 진행)."""
+    if not text:
+        return None
     try:
-        res = requests.post(url, json=payload, timeout=10)
-        if res.status_code != 200:
-            print(f"❌ 텔레그램 응답 오류: {res.status_code} {res.text}")
-            print("힌트: chat_id가 올바른지, 봇과 대화를 시작(/start)했는지 확인하세요.")
-        return res.status_code == 200
-    except requests.RequestException as e:
-        print(f"❌ 전송 중 네트워크 오류: {e}")
-        return False
+        return GoogleTranslator(source='en', target='ko').translate(text)
+    except Exception as e:
+        print(f"⚠️ 번역 실패: {e}")
+        return None
+
+
+def send_telegram(text):
+    """텔레그램 메시지 발송 (등록된 모든 Chat ID에게 전송). 하나라도 성공하면 True 반환."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    any_success = False
+    for chat_id in TELEGRAM_CHAT_IDS:
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True
+        }
+        try:
+            res = requests.post(url, json=payload, timeout=10)
+            if res.status_code != 200:
+                print(f"❌ [{chat_id}] 텔레그램 응답 오류: {res.status_code} {res.text}")
+                print("힌트: chat_id가 올바른지, 봇과 대화를 시작(/start)했는지 확인하세요.")
+            else:
+                any_success = True
+        except requests.RequestException as e:
+            print(f"❌ [{chat_id}] 전송 중 네트워크 오류: {e}")
+    return any_success
 
 
 def fetch_articles():
@@ -98,17 +126,42 @@ def fetch_articles():
             if not is_recent(entry, ARTICLE_MAX_AGE_HOURS):
                 continue
 
-            found_keywords = [kw for kw in TARGET_KEYWORDS if kw in title or kw in summary]
+            found_keywords = [kw for kw in TARGET_KEYWORDS if kw.lower() in title.lower() or kw.lower() in summary.lower()]
             if found_keywords:
-                matching_articles.append({
+                is_english = category.startswith("[EN]")
+                article = {
                     "category": category,
                     "title": title,
                     "summary": summary[:120] + "..." if len(summary) > 120 else summary,
                     "link": link,
-                    "keywords": list(set(found_keywords))
-                })
+                    "keywords": list(set(found_keywords)),
+                    "translated_title": None,
+                    "translated_summary": None,
+                }
+                if is_english:
+                    article["translated_title"] = translate_to_korean(title)
+                    article["translated_summary"] = translate_to_korean(article["summary"])
+                matching_articles.append(article)
 
     return matching_articles
+
+
+def diversify_order(matching_articles):
+    """한글/영어 기사를 번갈아 배치하되, 한쪽이 부족하면 다른 쪽으로 최대 MAX_ARTICLES개까지 채운다."""
+    korean_articles = [a for a in matching_articles if not a['category'].startswith("[EN]")]
+    english_articles = [a for a in matching_articles if a['category'].startswith("[EN]")]
+
+    ordered = []
+    i = 0
+    while len(ordered) < MAX_ARTICLES and (i < len(korean_articles) or i < len(english_articles)):
+        if i < len(korean_articles):
+            ordered.append(korean_articles[i])
+            if len(ordered) >= MAX_ARTICLES:
+                break
+        if i < len(english_articles):
+            ordered.append(english_articles[i])
+        i += 1
+    return ordered[:MAX_ARTICLES]
 
 
 def build_message(matching_articles):
@@ -116,7 +169,7 @@ def build_message(matching_articles):
 
     seen_titles = set()
     count = 0
-    for art in matching_articles:
+    for art in diversify_order(matching_articles):
         if art['title'] in seen_titles:
             continue
         seen_titles.add(art['title'])
@@ -128,6 +181,12 @@ def build_message(matching_articles):
         block = [f"🔹 <b>{safe_title}</b>", f"태그: <i>{kw_str}</i>"]
         if safe_summary:
             block.append(safe_summary)
+
+        if art.get('translated_title'):
+            block.append(f"🇰🇷 <i>{html.escape(art['translated_title'])}</i>")
+        if art.get('translated_summary'):
+            block.append(html.escape(art['translated_summary']))
+
         block.append(f"<a href='{art['link']}'>👉 기사 원문 보기</a>\n")
 
         candidate = "\n".join(msg_lines + block)
