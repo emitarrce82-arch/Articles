@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import requests
 import yfinance as yf
-from deep_translator import GoogleTranslator
+from deep_translator import GoogleTranslator, MyMemoryTranslator
 
 # ==========================================
 # 1. 텔레그램 설정 (GitHub Secrets에서 불러옴 — 기존 뉴스 봇과 동일한 값 재사용)
@@ -81,6 +81,28 @@ def fetch_next_earnings_date(symbol):
         return None
 
 
+def translate_to_korean(text):
+    """영어 텍스트를 한국어로 번역. 구글 번역이 막히면 MyMemory로 재시도. 둘 다 실패하면 원문 반환."""
+    if not text:
+        return text
+
+    try:
+        result = GoogleTranslator(source='en', target='ko').translate(text)
+        if result and result.strip().lower() != text.strip().lower():
+            return result
+    except Exception as e:
+        print(f"⚠️ 구글 번역 실패, MyMemory로 재시도: {e}")
+
+    try:
+        result = MyMemoryTranslator(source='en-GB', target='ko-KR').translate(text)
+        if result:
+            return result
+    except Exception as e:
+        print(f"⚠️ MyMemory 번역도 실패: {e}")
+
+    return text  # 둘 다 실패하면 원문이라도 반환
+
+
 def fetch_latest_news_headline(symbol):
     """최근 뉴스 헤드라인 하나를 가져와 한국어로 번역. 실패하면 None."""
     try:
@@ -98,12 +120,7 @@ def fetch_latest_news_headline(symbol):
         if not title:
             return None
 
-        try:
-            translated = GoogleTranslator(source='en', target='ko').translate(title)
-            return translated
-        except Exception as e:
-            print(f"⚠️ [{symbol}] 뉴스 번역 실패: {e}")
-            return title  # 번역 실패 시 원문이라도 반환
+        return translate_to_korean(title)
     except Exception as e:
         print(f"⚠️ [{symbol}] 뉴스 조회 실패: {e}")
         return None
