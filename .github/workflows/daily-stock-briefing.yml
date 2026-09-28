@@ -2,10 +2,10 @@ name: Daily Stock Briefing
 
 on:
   schedule:
-    # UTC 18:00 = 한국시간(KST) 오전 03:00
-    - cron: "0 18 * * *"
-    # UTC 08:45 = 한국시간(KST) 오후 05:45
-    - cron: "45 8 * * *"
+    # UTC 18:45 = 한국시간(KST) 오전 03:45
+    - cron: "45 18 * * *"
+    # UTC 05:45 = 한국시간(KST) 오후 02:45
+    - cron: "45 5 * * *"
   workflow_dispatch: {}  # 수동으로도 실행 가능 (Actions 탭에서 Run workflow)
 
 jobs:
