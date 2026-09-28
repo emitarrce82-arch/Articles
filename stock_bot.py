@@ -181,7 +181,7 @@ def build_table_section(rows, title):
         if r['change'] is None:
             change_str = "N/A"
         else:
-            arrow = "🔺" if r['change'] > 0 else ("🔵" if r['change'] < 0 else "➖")
+            arrow = "🔺" if r['change'] > 0 else ("⬇️" if r['change'] < 0 else "➖")
             change_str = f"{arrow}{r['change']:+.2f}%"
         earnings_str = r['earnings'] if r['earnings'] else "미정"
 
