@@ -1,3 +1,4 @@
+import html
 import os
 import sys
 import unicodedata
@@ -136,7 +137,7 @@ def translate_to_korean(text):
 
 
 def fetch_latest_news_headline(symbol):
-    """최근 뉴스 헤드라인 하나를 가져와 한국어로 번역. 실패하면 None."""
+    """최근 뉴스 1건을 가져와 제목은 한국어로 번역하고, 링크/출처와 함께 dict로 반환. 실패하면 None."""
     try:
         ticker = yf.Ticker(symbol)
         news_list = ticker.news or []
@@ -145,14 +146,23 @@ def fetch_latest_news_headline(symbol):
 
         first = news_list[0]
         # yfinance 버전에 따라 구조가 다를 수 있어 두 가지 형태 모두 대응
-        title = first.get('title')
-        if not title and 'content' in first:
-            title = first['content'].get('title')
+        content = first.get('content') or {}
+        title = first.get('title') or content.get('title')
+        link = (
+            first.get('link')
+            or (content.get('canonicalUrl') or {}).get('url')
+            or (content.get('clickThroughUrl') or {}).get('url')
+        )
+        publisher = first.get('publisher') or (content.get('provider') or {}).get('displayName')
 
         if not title:
             return None
 
-        return translate_to_korean(title)
+        return {
+            "title": translate_to_korean(title),
+            "link": link,
+            "publisher": publisher,
+        }
     except Exception as e:
         print(f"⚠️ [{symbol}] 뉴스 조회 실패: {e}")
         return None
@@ -171,7 +181,7 @@ def build_table_section(rows, title):
         if r['change'] is None:
             change_str = "N/A"
         else:
-            arrow = "🔺" if r['change'] > 0 else ("🔻" if r['change'] < 0 else "➖")
+            arrow = "🔺" if r['change'] > 0 else ("🔵" if r['change'] < 0 else "➖")
             change_str = f"{arrow}{r['change']:+.2f}%"
         earnings_str = r['earnings'] if r['earnings'] else "미정"
 
@@ -183,8 +193,15 @@ def build_table_section(rows, title):
 def build_news_section(rows, title="📰 최근 이슈 한 줄"):
     lines = [f"<b>{title}</b>"]
     for r in rows:
-        if r['news']:
-            lines.append(f"🔹 <b>{r['name']}</b>: {r['news']}")
+        news = r.get('news')
+        if not news:
+            continue
+        line = f"🔹 <b>{html.escape(r['name'])}</b>: {html.escape(news['title'])}"
+        if news.get('link'):
+            source = html.escape(news.get('publisher') or "출처")
+            safe_link = html.escape(news['link'], quote=True)
+            line += f" <a href=\"{safe_link}\">[{source}]</a>"
+        lines.append(line)
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
