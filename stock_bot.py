@@ -1,10 +1,13 @@
 import html
 import os
+import re
 import sys
 import unicodedata
 from datetime import datetime, timezone
+from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
 
+import feedparser
 import requests
 import yfinance as yf
 from deep_translator import GoogleTranslator, MyMemoryTranslator
@@ -151,25 +154,46 @@ def translate_to_korean(text):
     return text  # 둘 다 실패하면 원문이라도 반환
 
 
-def fetch_latest_news_headline(symbol):
-    """최근 뉴스 1건을 가져와 제목은 한국어로 번역하고, 링크/출처와 함께 dict로 반환. 실패하면 None."""
+def clean_search_name(name):
+    """'(ADR)', '(국내)' 같은 부가 표기를 떼어내 검색어로 쓰기 좋은 이름을 만든다."""
+    return re.sub(r'\(.*?\)', '', name).strip()
+
+
+# 미국 뉴스 검색 시, 한글 표시명 대신 실제 영어 회사명으로 검색해야 더 정확한 결과가 나온다.
+US_SEARCH_NAME_OVERRIDES = {
+    "SK하이닉스": "SK Hynix",
+    "마이크론": "Micron",
+    "엔비디아": "Nvidia",
+    "인텔": "Intel",
+    "퀄컴": "Qualcomm",
+    "브로드컴": "Broadcom",
+}
+
+
+def fetch_latest_news_headline(name, symbol, market="US"):
+    """구글 뉴스 RSS로 최신 뉴스 1건을 가져와 제목은 한국어로 번역하고, 링크/출처와 함께 dict로 반환. 실패하면 None."""
+    query_name = clean_search_name(name)
+    if market == "KR":
+        query = f"{query_name} 주가"
+        hl, gl, ceid = "ko", "KR", "KR:ko"
+    else:
+        query_name = US_SEARCH_NAME_OVERRIDES.get(query_name, query_name)
+        query = f"{query_name} stock"
+        hl, gl, ceid = "en-US", "US", "US:en"
+
+    url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl={hl}&gl={gl}&ceid={ceid}"
+
     try:
-        ticker = get_ticker(symbol)
-        news_list = ticker.news or []
-        if not news_list:
-            print(f"ℹ️ [{symbol}] 야후에서 뉴스가 비어있게 반환됨 (차단/일시적 이슈 가능)")
+        feed = feedparser.parse(url)
+        if not feed.entries:
+            print(f"ℹ️ [{symbol}] 구글 뉴스 검색 결과 없음 (query='{query}')")
             return None
 
-        first = news_list[0]
-        # yfinance 버전에 따라 구조가 다를 수 있어 두 가지 형태 모두 대응
-        content = first.get('content') or {}
-        title = first.get('title') or content.get('title')
-        link = (
-            first.get('link')
-            or (content.get('canonicalUrl') or {}).get('url')
-            or (content.get('clickThroughUrl') or {}).get('url')
-        )
-        publisher = first.get('publisher') or (content.get('provider') or {}).get('displayName')
+        entry = feed.entries[0]
+        title = getattr(entry, 'title', None)
+        link = getattr(entry, 'link', None)
+        source = getattr(entry, 'source', None)
+        publisher = getattr(source, 'title', None) if source is not None else None
 
         if not title:
             return None
@@ -177,7 +201,7 @@ def fetch_latest_news_headline(symbol):
         return {
             "title": translate_to_korean(title),
             "link": link,
-            "publisher": publisher,
+            "publisher": publisher or "Google News",
         }
     except Exception as e:
         print(f"⚠️ [{symbol}] 뉴스 조회 실패: {e}")
@@ -221,13 +245,13 @@ def build_news_section(rows, title="📰 최근 이슈 한 줄"):
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
-def fetch_rows(ticker_list):
+def fetch_rows(ticker_list, market="US"):
     rows = []
     for name, symbol in ticker_list:
         print(f"조회 중: {name} ({symbol})")
         change, as_of = fetch_price_change(symbol)
         earnings = fetch_next_earnings_date(symbol)
-        news = fetch_latest_news_headline(symbol)
+        news = fetch_latest_news_headline(name, symbol, market)
         rows.append({"name": name, "symbol": symbol, "change": change, "as_of": as_of,
                      "earnings": earnings, "news": news})
     return rows
@@ -307,8 +331,8 @@ def send_telegram(text):
 
 
 def main():
-    us_rows = fetch_rows(TICKERS)
-    kr_rows = fetch_rows(KR_TICKERS)
+    us_rows = fetch_rows(TICKERS, market="US")
+    kr_rows = fetch_rows(KR_TICKERS, market="KR")
 
     us_as_of = most_common_as_of(us_rows)
     kr_as_of = most_common_as_of(kr_rows)
