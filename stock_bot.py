@@ -9,6 +9,21 @@ import requests
 import yfinance as yf
 from deep_translator import GoogleTranslator, MyMemoryTranslator
 
+# 야후 파이낸스가 최근 비공식 접근을 자동 차단하는 경우가 늘어서,
+# 브라우저처럼 보이는 세션(curl_cffi)을 붙여서 요청 안정성을 높인다.
+try:
+    from curl_cffi import requests as cffi_requests
+    YF_SESSION = cffi_requests.Session(impersonate="chrome")
+except Exception as e:
+    print(f"⚠️ curl_cffi 세션 생성 실패, 기본 세션으로 진행: {e}")
+    YF_SESSION = None
+
+
+def get_ticker(symbol):
+    if YF_SESSION is not None:
+        return yf.Ticker(symbol, session=YF_SESSION)
+    return yf.Ticker(symbol)
+
 # ==========================================
 # 1. 텔레그램 설정 (GitHub Secrets에서 불러옴 — 기존 뉴스 봇과 동일한 값 재사용)
 # ==========================================
@@ -59,7 +74,7 @@ def pad(s, width):
 def fetch_price_change(symbol):
     """전일 종가 기준 등락률(%)과 그 기준이 된 거래일(현지 거래소 기준 날짜)을 계산. 실패하면 (None, None)."""
     try:
-        hist = yf.Ticker(symbol).history(period="5d")
+        hist = get_ticker(symbol).history(period="5d")
         if len(hist) < 2:
             return None, None
         last_close = hist['Close'].iloc[-1]
@@ -77,7 +92,7 @@ def fetch_price_change(symbol):
 def fetch_next_earnings_date(symbol):
     """다음 예정 실적 발표일(문자열). 못 찾으면 None."""
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = get_ticker(symbol)
         df = ticker.get_earnings_dates(limit=12)
         if df is None or df.empty:
             return None
@@ -139,9 +154,10 @@ def translate_to_korean(text):
 def fetch_latest_news_headline(symbol):
     """최근 뉴스 1건을 가져와 제목은 한국어로 번역하고, 링크/출처와 함께 dict로 반환. 실패하면 None."""
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = get_ticker(symbol)
         news_list = ticker.news or []
         if not news_list:
+            print(f"ℹ️ [{symbol}] 야후에서 뉴스가 비어있게 반환됨 (차단/일시적 이슈 가능)")
             return None
 
         first = news_list[0]
@@ -239,7 +255,7 @@ MARKET_STATE_LABELS = {
 def get_market_state_label(symbol):
     """대표 종목 하나로 해당 시장이 지금 열려있는지/닫혀있는지 확인. 실패하면 (None, None)."""
     try:
-        state = yf.Ticker(symbol).info.get('marketState')
+        state = get_ticker(symbol).info.get('marketState')
         return state, MARKET_STATE_LABELS.get(state)
     except Exception as e:
         print(f"⚠️ [{symbol}] 시장 상태 조회 실패: {e}")
