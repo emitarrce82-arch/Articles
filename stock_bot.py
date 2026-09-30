@@ -230,8 +230,13 @@ def build_table_section(rows, title):
     return f"<b>{title}</b>\n<pre>" + "\n".join(lines) + "</pre>"
 
 
-def build_news_section(rows, title="📰 최근 이슈 한 줄"):
-    lines = [f"<b>{title}</b>"]
+def build_news_section(rows, title="📰 최근 이슈 한 줄", char_budget=3800):
+    """줄(뉴스 항목) 단위로만 잘라서 HTML 태그가 중간에 끊기지 않도록 한다."""
+    header = f"<b>{title}</b>"
+    lines = [header]
+    total = len(header)
+    truncated = False
+
     for r in rows:
         news = r.get('news')
         if not news:
@@ -241,7 +246,17 @@ def build_news_section(rows, title="📰 최근 이슈 한 줄"):
             source = html.escape(news.get('publisher') or "출처")
             safe_link = html.escape(news['link'], quote=True)
             line += f" <a href=\"{safe_link}\">[{source}]</a>"
+
+        if total + len(line) + 1 > char_budget:
+            truncated = True
+            break
+
         lines.append(line)
+        total += len(line) + 1
+
+    if truncated:
+        lines.append("…(이하 생략)")
+
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
@@ -346,26 +361,22 @@ def main():
     us_title = f"🇺🇸 미국 시장 ({us_timing})" if us_timing else "🇺🇸 미국 시장"
     kr_title = f"🇰🇷 국내 비교 ({kr_timing})" if kr_timing else "🇰🇷 국내 비교 (코스피 원주)"
 
-    message_parts = [
+    # 메시지 1: 표(등락률/실적일) — 태그가 중간에 끊길 위험이 없도록 뉴스와 분리해서 발송
+    table_message = "\n".join([
         "<b>📈 [반도체 관련 종목 시황]</b>\n",
         build_table_section(us_rows, us_title),
         build_table_section(kr_rows, kr_title),
-    ]
+    ])
 
+    # 메시지 2: 뉴스 한 줄 요약 (길어지면 항목 단위로만 잘림)
     us_news = build_news_section(us_rows, "🇺🇸 미국 관련 이슈")
-    if us_news:
-        message_parts.append("\n" + us_news)
-
     kr_news = build_news_section(kr_rows, "🇰🇷 국내 관련 이슈")
-    if kr_news:
-        message_parts.append("\n" + kr_news)
+    news_message = "\n\n".join(part for part in [us_news, kr_news] if part)
 
-    final_message = "\n".join(message_parts)
-    if len(final_message) > MAX_MESSAGE_LEN:
-        final_message = final_message[:MAX_MESSAGE_LEN] + "\n...(생략)"
+    table_success = send_telegram(table_message)
+    news_success = send_telegram(news_message) if news_message else True
 
-    success = send_telegram(final_message)
-    if success:
+    if table_success and news_success:
         print("✅ 텔레그램 발송 완료!")
     else:
         print("❌ 발송 실패. 토큰 또는 Chat ID를 다시 확인하세요.")
