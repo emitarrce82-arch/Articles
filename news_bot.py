@@ -2,11 +2,14 @@ import os
 import re
 import sys
 import html
+import socket
 import calendar
 from datetime import datetime, timezone, timedelta
 import feedparser
 import requests
 from deep_translator import GoogleTranslator
+
+socket.setdefaulttimeout(15)  # 응답 없는 서버에 무한정 매달리지 않도록 타임아웃 설정
 
 # ==========================================
 # 1. 텔레그램 설정 (GitHub Secrets에서 불러옴)
@@ -111,9 +114,18 @@ def fetch_articles():
     matching_articles = []
 
     for category, url in RSS_FEEDS.items():
-        feed = feedparser.parse(url)
+        try:
+            feed = feedparser.parse(url)
+        except Exception as e:
+            print(f"⚠️ {category} 피드 요청 실패, 건너뜀: {e}")
+            continue
+
         if feed.bozo:
             print(f"⚠️ {category} 피드 파싱 경고: {feed.bozo_exception}")
+
+        if not getattr(feed, 'entries', None):
+            print(f"⚠️ {category} 피드에서 기사를 가져오지 못함 (빈 결과)")
+            continue
 
         for entry in feed.entries[:MAX_ENTRIES_PER_FEED]:
             title = getattr(entry, 'title', '')
